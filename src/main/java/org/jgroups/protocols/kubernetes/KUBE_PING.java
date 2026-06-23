@@ -12,7 +12,6 @@ import org.jgroups.conf.ClassConfigurator;
 import org.jgroups.protocols.Discovery;
 import org.jgroups.protocols.PingData;
 import org.jgroups.protocols.PingHeader;
-import org.jgroups.protocols.TP;
 import org.jgroups.protocols.kubernetes.stream.CertificateStreamProvider;
 import org.jgroups.protocols.kubernetes.stream.StreamProvider;
 import org.jgroups.protocols.kubernetes.stream.TokenStreamProvider;
@@ -141,8 +140,6 @@ public class KUBE_PING extends Discovery {
 
     public void init() throws Exception {
         super.init();
-
-        TP transport=getTransport();
         tp_bind_port=transport.getBindPort();
         if(tp_bind_port <= 0)
             throw new IllegalArgumentException(String.format("%s only works with  %s.bind_port > 0",
@@ -173,7 +170,7 @@ public class KUBE_PING extends Discovery {
         }
         String url=String.format("%s://%s:%s/api/%s", masterProtocol, masterHost, masterPort, apiVersion);
         client=new Client(url, headers, connectTimeout, readTimeout, operationAttempts, operationSleep, streamProvider, log);
-        log.debug("KubePING configuration: " + toString());
+        log.debug("KUBE_PING configuration: " + this);
     }
 
     private void checkDeprecatedProperties() {
@@ -190,7 +187,7 @@ public class KUBE_PING extends Discovery {
             log.warn("%s is deprecated, please remove it and use %s instead", deprecated_name, property_name);
     }
 
-    private boolean isPropertyDefined(String property_name) {
+    private static boolean isPropertyDefined(String property_name) {
         return System.getProperty(property_name) != null
                 || System.getenv(property_name) != null;
     }
@@ -205,13 +202,11 @@ public class KUBE_PING extends Discovery {
         PhysicalAddress       physical_addr=null;
         PingData              data=null;
 
-        if(!use_ip_addrs || !initial_discovery) {
-            physical_addr = getCurrentPhysicalAddress(local_addr);
-            // https://issues.jboss.org/browse/JGRP-1670
-            data=new PingData(local_addr, false, NameCache.get(local_addr), physical_addr);
-            if(members != null && members.size() <= max_members_in_discovery_request)
-                data.mbrs(members);
-        }
+        physical_addr = getCurrentPhysicalAddress(local_addr);
+        // https://issues.jboss.org/browse/JGRP-1670
+        data=new PingData(local_addr, false, NameCache.get(local_addr), physical_addr);
+        if(members != null && members.size() <= max_members_in_discovery_request)
+            data.mbrs(members);
 
         if(hosts != null) {
             if(log.isTraceEnabled())
@@ -276,7 +271,7 @@ public class KUBE_PING extends Discovery {
             log.trace("%s: sending discovery requests to %s", local_addr, cluster_members);
         PingHeader hdr=new PingHeader(PingHeader.GET_MBRS_REQ).clusterName(cluster_name).initialDiscovery(initial_discovery);
         for(final PhysicalAddress addr: cluster_members) {
-            if(physical_addr != null && addr.equals(physical_addr)) // no need to send the request to myself
+            if(addr.equals(physical_addr)) // no need to send the request to myself
                 continue;
 
             // the message needs to be DONT_BUNDLE, see explanation above
@@ -329,7 +324,7 @@ public class KUBE_PING extends Discovery {
 
     @Override
     public String toString() {
-        return String.format("KubePing{namespace='%s', labels='%s'}", namespace, labels);
+        return String.format("KUBE_PING{namespace='%s', labels='%s'}", namespace, labels);
     }
 
 

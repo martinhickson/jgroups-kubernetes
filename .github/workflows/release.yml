@@ -1,0 +1,189 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: 'Release version (e.g., 1.0.17.bravura.1)'
+        required: true
+        type: string
+      base_branch:
+        description: 'Branch to release from'
+        required: false
+        default: '1.0.17-maintenance'
+        type: string
+      run_tests:
+        description: 'Run unit tests before release'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      MAVEN_OPTS: -Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=warn
+      RELEASE_VERSION: ${{ github.event.inputs.release_version }}
+      BRANCH_NAME: v${{ github.event.inputs.release_version }}
+      TAG_NAME: v${{ github.event.inputs.release_version }}-release
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        ref: ${{ github.event.inputs.base_branch }}
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Configure Git
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+    - name: Create release branch
+      run: |
+        git checkout -b "${{ env.BRANCH_NAME }}"
+        echo "Created branch: ${{ env.BRANCH_NAME }}"
+
+    - name: Set up JDK 11
+      uses: actions/setup-java@v4
+      with:
+        java-version: '11'
+        distribution: 'temurin'
+
+    - name: Update version in POM
+      run: |
+        mvn versions:set -DnewVersion="${RELEASE_VERSION}" -DgenerateBackupPoms=false
+        sed -i "s|<tag>.*</tag>|<tag>${RELEASE_VERSION}</tag>|" pom.xml
+        echo "Version update completed"
+      env:
+        RELEASE_VERSION: ${{ env.RELEASE_VERSION }}
+
+    - name: Verify version updates
+      run: |
+        echo "Verifying version updates..."
+        echo "Project version:"
+        grep -A 1 "<artifactId>jgroups-kubernetes</artifactId>" pom.xml | grep "<version>"
+        echo ""
+        echo "SCM tag:"
+        grep "<tag>" pom.xml | head -1
+
+    - name: Commit and push version changes
+      run: |
+        git add pom.xml
+        if git diff --staged --quiet; then
+          echo "No changes to commit"
+        else
+          git commit -m "Release version ${RELEASE_VERSION}"
+          git push origin "${BRANCH_NAME}"
+        fi
+
+    - name: Cache Maven dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.m2
+        key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+        restore-keys: ${{ runner.os }}-m2
+
+    - name: Configure Maven for GitHub Packages
+      run: |
+        mkdir -p ~/.m2
+        cat > ~/.m2/settings.xml << 'EOF'
+        <settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
+                  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                  xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0
+                                      http://maven.apache.org/xsd/settings-1.0.0.xsd">
+          <servers>
+            <server>
+              <id>github-packages</id>
+              <username>MAVEN_GITHUB_ACTOR</username>
+              <password>MAVEN_GITHUB_TOKEN</password>
+            </server>
+          </servers>
+          <profiles>
+            <profile>
+              <id>ci-extra-repositories</id>
+              <repositories>
+                <repository>
+                  <id>jboss-public</id>
+                  <name>JBoss Public Repository Group</name>
+                  <url>https://repository.jboss.org/nexus/content/groups/public</url>
+                  <releases><enabled>true</enabled></releases>
+                  <snapshots><enabled>false</enabled></snapshots>
+                </repository>
+              </repositories>
+              <pluginRepositories>
+                <pluginRepository>
+                  <id>jboss-public</id>
+                  <name>JBoss Public Repository Group</name>
+                  <url>https://repository.jboss.org/nexus/content/groups/public</url>
+                  <releases><enabled>true</enabled></releases>
+                  <snapshots><enabled>false</enabled></snapshots>
+                </pluginRepository>
+              </pluginRepositories>
+            </profile>
+          </profiles>
+          <activeProfiles>
+            <activeProfile>ci-extra-repositories</activeProfile>
+          </activeProfiles>
+        </settings>
+        EOF
+        sed -i "s|MAVEN_GITHUB_ACTOR|${GITHUB_ACTOR}|g; s|MAVEN_GITHUB_TOKEN|${GITHUB_TOKEN}|g" ~/.m2/settings.xml
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_ACTOR: ${{ github.actor }}
+
+    - name: Build
+      if: ${{ github.event.inputs.run_tests != 'true' }}
+      run: mvn clean install -ntp -DskipTests
+
+    - name: Build and test
+      if: ${{ github.event.inputs.run_tests == 'true' }}
+      run: mvn clean verify -ntp
+
+    - name: Create and push tag
+      run: |
+        git tag -a "${TAG_NAME}" -m "Release ${RELEASE_VERSION}"
+        git push origin "${TAG_NAME}"
+
+    - name: Publish to GitHub Packages
+      run: |
+        mvn org.apache.maven.plugins:maven-deploy-plugin:3.1.2:deploy -ntp \
+          -DaltDeploymentRepository=github-packages::default::https://maven.pkg.github.com/${{ github.repository }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-artifacts-${{ github.event.inputs.release_version }}
+        path: |
+          target/*.jar
+        retention-days: 30
+        if-no-files-found: warn
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ env.TAG_NAME }}
+        name: Release ${{ env.RELEASE_VERSION }}
+        body: |
+          Release ${{ env.RELEASE_VERSION }}
+
+          Maintenance-line release of KUBE_PING (jgroups-kubernetes) for Kubernetes-based JGroups discovery.
+
+          This release includes:
+          - Maven artifacts published to GitHub Packages
+          - Release branch: ${{ env.BRANCH_NAME }}
+          - Tag: ${{ env.TAG_NAME }}
+          - Source branch: ${{ github.event.inputs.base_branch }}
+        draft: false
+        prerelease: false
+        files: |
+          target/*.jar
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
