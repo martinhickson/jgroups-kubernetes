@@ -1,5 +1,6 @@
 package org.jgroups.protocols.kubernetes.stream;
 
+import static org.jgroups.protocols.kubernetes.Utils.getSystemProperty;
 import static org.jgroups.protocols.kubernetes.Utils.openFile;
 import static org.jgroups.protocols.kubernetes.Utils.readFileToString;
 
@@ -40,7 +41,19 @@ public class TokenStreamProvider extends BaseStreamProvider {
     private final String saTokenFile;
     private volatile String cachedSaToken;
     private volatile Instant lastSaTokenRefreshTimestamp = Instant.MIN;
-    private static final Duration REFRESH_INTERVAL = Duration.ofMinutes(1);
+    private static final Duration REFRESH_INTERVAL = refreshInterval();
+    private static final String LOG_REFRESH_AT_INFO_PROPERTY = "KUBERNETES_SA_TOKEN_REFRESH_LOG_INFO";
+
+    private static Duration refreshInterval() {
+        String seconds = getSystemProperty("KUBERNETES_SA_TOKEN_REFRESH_INTERVAL_SECONDS", null);
+        if (seconds != null) {
+            try {
+                return Duration.ofSeconds(Long.parseLong(seconds.trim()));
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return Duration.ofMinutes(1);
+    }
 
     public static final String AUTHORIZATION = "Authorization";
 
@@ -83,6 +96,7 @@ public class TokenStreamProvider extends BaseStreamProvider {
             int responseCode = ((HttpURLConnection) connection).getResponseCode();
             if (responseCode == HttpURLConnection.HTTP_UNAUTHORIZED) {
                 refreshToken();
+                log.info("Received HTTP 401 Unauthorized from Kubernetes API server; token refreshed for retry");
                 throw new IOException("Received HTTP 401 Unauthorized from Kubernetes API server; token refreshed for retry");
             }
         }
@@ -99,10 +113,21 @@ public class TokenStreamProvider extends BaseStreamProvider {
             String token = readFileToString(saTokenFile);
             cachedSaToken = token != null ? token.trim() : null;
             lastSaTokenRefreshTimestamp = Instant.now();
-            log.fine(String.format("Refreshed service account token from file '%s'.", saTokenFile));
+            logTokenRefresh(String.format("Refreshed service account token from file '%s'.", saTokenFile));
         } catch (IOException e) {
             log.log(Level.WARNING, String.format("Failed to refresh service account token from file '%s'.", saTokenFile), e);
         }
+    }
+
+    private static void logTokenRefresh(String message) {
+        Level level = isLogRefreshAtInfo() ? Level.INFO : Level.FINE;
+        if (log.isLoggable(level)) {
+            log.log(level, message);
+        }
+    }
+
+    private static boolean isLogRefreshAtInfo() {
+        return Boolean.parseBoolean(getSystemProperty(LOG_REFRESH_AT_INFO_PROPERTY, "false"));
     }
 
     static TrustManager[] configureCaCert(String caCertFile) throws Exception {

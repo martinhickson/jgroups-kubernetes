@@ -17,3 +17,5 @@ dist/wildfly/docker/wildfly-openshift.zip
 hs_err_pid*
 target/
 release.properties
+kubernetes-it/.bin/
+kubernetes-it/target/

@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: kubernetes-it-headless
+  namespace: kubernetes-it
+  labels:
+    kubernetes-it: jgroups
+spec:
+  clusterIP: None
+  selector:
+    kubernetes-it: jgroups
+  ports:
+    - name: jgroups-tcp
+      port: 7800
+      targetPort: 7800

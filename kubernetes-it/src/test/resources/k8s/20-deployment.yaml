@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kubernetes-it-member
+  namespace: kubernetes-it
+  labels:
+    kubernetes-it: jgroups
+spec:
+  serviceName: kubernetes-it-headless
+  podManagementPolicy: OrderedReady
+  replicas: 3
+  selector:
+    matchLabels:
+      kubernetes-it: jgroups
+  template:
+    metadata:
+      labels:
+        kubernetes-it: jgroups
+    spec:
+      serviceAccountName: kubernetes-it-sa
+      automountServiceAccountToken: true
+      volumes:
+        - name: kubernetes-it-token
+          emptyDir: {}
+      containers:
+        - name: member
+          image: kubernetes-it-jgroups-member:it
+          imagePullPolicy: IfNotPresent
+          volumeMounts:
+            - name: kubernetes-it-token
+              mountPath: /var/run/kubernetes-it
+          env:
+            - name: KUBERNETES_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: KUBERNETES_LABELS
+              value: "kubernetes-it=jgroups"
+            - name: KUBERNETES_SERVICE_HOST
+              value: "kubernetes.default.svc"
+            - name: KUBERNETES_SERVICE_PORT
+              value: "443"
+            - name: SA_TOKEN_FILE
+              value: "/var/run/kubernetes-it/token"
+            - name: KUBERNETES_SA_TOKEN_REFRESH_INTERVAL_SECONDS
+              value: "10"
+            - name: KUBERNETES_SA_TOKEN_REFRESH_LOG_INFO
+              value: "true"
+            - name: KUBERNETES_IT_HELLO_DURATION_SECONDS
+              value: "30"
+            - name: KUBERNETES_IT_HELLO_INTERVAL_SECONDS
+              value: "5"
+            - name: KUBERNETES_IT_REFORM_PAUSE_SECONDS
+              value: "5"
+            - name: KUBERNETES_IT_REFORM_SETTLE_SECONDS
+              value: "20"
+            - name: KUBERNETES_IT_REFORM_HELLO_DURATION_SECONDS
+              value: "15"
+            - name: KUBERNETES_IT_SIMULATE_401
+              value: "true"
+            - name: JGROUPS_CLUSTER_NAME
+              value: "kubernetes-it-cluster"
+            - name: JGROUPS_BIND_PORT
+              value: "7800"
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
