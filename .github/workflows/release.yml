@@ -1,189 +1,214 @@
-name: Release
+name: Release Workflow
 
 on:
   workflow_dispatch:
     inputs:
-      release_version:
-        description: 'Release version (e.g., 1.0.17.bravura.1)'
+      version:
+        description: 'Release version (e.g., 1.0.17-bravura-6)'
         required: true
+        default: '1.0.17-bravura-6'
         type: string
-      base_branch:
-        description: 'Branch to release from'
-        required: false
+      release_branch:
+        description: 'Release branch name'
+        required: true
+        default: 'release/1.0.17-bravura-6'
+        type: string
+      source_branch:
+        description: 'Source branch to create release from'
+        required: true
         default: '1.0.17-maintenance'
         type: string
-      run_tests:
-        description: 'Run unit tests before release'
+      deploy_to_maven_central:
+        description: 'Deploy artifacts to Maven Central?'
         required: false
-        default: true
+        default: false
         type: boolean
-
-permissions:
-  contents: write
-  packages: write
 
 jobs:
   release:
+    name: Create Release
     runs-on: ubuntu-latest
-    env:
-      MAVEN_OPTS: -Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=warn
-      RELEASE_VERSION: ${{ github.event.inputs.release_version }}
-      BRANCH_NAME: v${{ github.event.inputs.release_version }}
-      TAG_NAME: v${{ github.event.inputs.release_version }}-release
+    timeout-minutes: 60
+    permissions:
+      contents: write
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-        ref: ${{ github.event.inputs.base_branch }}
-        token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Configure Git
-      run: |
-        git config --global user.name "github-actions[bot]"
-        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+      - name: Set up Temurin 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: 17
+          distribution: 'temurin'
+          cache: 'maven'
 
-    - name: Create release branch
-      run: |
-        git checkout -b "${{ env.BRANCH_NAME }}"
-        echo "Created branch: ${{ env.BRANCH_NAME }}"
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
-    - name: Set up JDK 11
-      uses: actions/setup-java@v4
-      with:
-        java-version: '11'
-        distribution: 'temurin'
+      - name: Fetch all refs
+        run: git fetch --all --tags
 
-    - name: Update version in POM
-      run: |
-        mvn versions:set -DnewVersion="${RELEASE_VERSION}" -DgenerateBackupPoms=false
-        sed -i "s|<tag>.*</tag>|<tag>${RELEASE_VERSION}</tag>|" pom.xml
-        echo "Version update completed"
-      env:
-        RELEASE_VERSION: ${{ env.RELEASE_VERSION }}
+      - name: Create or checkout release branch
+        run: |
+          SOURCE_BRANCH="${{ github.event.inputs.source_branch }}"
+          RELEASE_BRANCH="${{ github.event.inputs.release_branch }}"
 
-    - name: Verify version updates
-      run: |
-        echo "Verifying version updates..."
-        echo "Project version:"
-        grep -A 1 "<artifactId>jgroups-kubernetes</artifactId>" pom.xml | grep "<version>"
-        echo ""
-        echo "SCM tag:"
-        grep "<tag>" pom.xml | head -1
+          if ! git show-ref --verify --quiet refs/remotes/origin/$SOURCE_BRANCH; then
+            echo "Error: Source branch '$SOURCE_BRANCH' does not exist remotely"
+            exit 1
+          fi
 
-    - name: Commit and push version changes
-      run: |
-        git add pom.xml
-        if git diff --staged --quiet; then
-          echo "No changes to commit"
-        else
-          git commit -m "Release version ${RELEASE_VERSION}"
-          git push origin "${BRANCH_NAME}"
-        fi
+          git checkout $SOURCE_BRANCH
+          git pull origin $SOURCE_BRANCH
 
-    - name: Cache Maven dependencies
-      uses: actions/cache@v3
-      with:
-        path: ~/.m2
-        key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
-        restore-keys: ${{ runner.os }}-m2
+          if git show-ref --verify --quiet refs/heads/$RELEASE_BRANCH; then
+            git checkout $RELEASE_BRANCH
+            git pull origin $RELEASE_BRANCH || true
+          elif git show-ref --verify --quiet refs/remotes/origin/$RELEASE_BRANCH; then
+            git checkout -b $RELEASE_BRANCH origin/$RELEASE_BRANCH
+          else
+            git checkout -b $RELEASE_BRANCH
+          fi
 
-    - name: Configure Maven for GitHub Packages
-      run: |
-        mkdir -p ~/.m2
-        cat > ~/.m2/settings.xml << 'EOF'
-        <settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
-                  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-                  xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0
-                                      http://maven.apache.org/xsd/settings-1.0.0.xsd">
-          <servers>
-            <server>
-              <id>github-packages</id>
-              <username>MAVEN_GITHUB_ACTOR</username>
-              <password>MAVEN_GITHUB_TOKEN</password>
-            </server>
-          </servers>
-          <profiles>
-            <profile>
-              <id>ci-extra-repositories</id>
-              <repositories>
-                <repository>
-                  <id>jboss-public</id>
-                  <name>JBoss Public Repository Group</name>
-                  <url>https://repository.jboss.org/nexus/content/groups/public</url>
-                  <releases><enabled>true</enabled></releases>
-                  <snapshots><enabled>false</enabled></snapshots>
-                </repository>
-              </repositories>
-              <pluginRepositories>
-                <pluginRepository>
-                  <id>jboss-public</id>
-                  <name>JBoss Public Repository Group</name>
-                  <url>https://repository.jboss.org/nexus/content/groups/public</url>
-                  <releases><enabled>true</enabled></releases>
-                  <snapshots><enabled>false</enabled></snapshots>
-                </pluginRepository>
-              </pluginRepositories>
-            </profile>
-          </profiles>
-          <activeProfiles>
-            <activeProfile>ci-extra-repositories</activeProfile>
-          </activeProfiles>
-        </settings>
-        EOF
-        sed -i "s|MAVEN_GITHUB_ACTOR|${GITHUB_ACTOR}|g; s|MAVEN_GITHUB_TOKEN|${GITHUB_TOKEN}|g" ~/.m2/settings.xml
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        GITHUB_ACTOR: ${{ github.actor }}
+      - name: Set Maven version
+        run: |
+          mvn -B -ntp versions:set -DnewVersion=${{ github.event.inputs.version }} -DgenerateBackupPoms=false
 
-    - name: Build
-      if: ${{ github.event.inputs.run_tests != 'true' }}
-      run: mvn clean install -ntp -DskipTests
+      - name: Rewrite groupId to io.github.martinhickson
+        run: |
+          echo "groupId before: $(grep -m1 '<groupId>' pom.xml)"
+          sed -i '0,/<groupId>org.jgroups.kubernetes</groupId>/s//<groupId>io.github.martinhickson<\/groupId>/' pom.xml
+          echo "groupId after: $(grep -m1 '<groupId>' pom.xml)"
+          if ! grep -q '<groupId>io.github.martinhickson</groupId>' pom.xml; then
+            echo "Error: groupId rewrite failed"
+            exit 1
+          fi
 
-    - name: Build and test
-      if: ${{ github.event.inputs.run_tests == 'true' }}
-      run: mvn clean verify -ntp
+      - name: Build with Maven
+        run: mvn -B -ntp install -DskipTests=true -Denforcer.skip=true
 
-    - name: Create and push tag
-      run: |
-        git tag -a "${TAG_NAME}" -m "Release ${RELEASE_VERSION}"
-        git push origin "${TAG_NAME}"
+      - name: Commit version changes
+        run: |
+          git add pom.xml
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Release version ${{ github.event.inputs.version }} (io.github.martinhickson)"
+          fi
 
-    - name: Publish to GitHub Packages
-      run: |
-        mvn install org.apache.maven.plugins:maven-deploy-plugin:3.1.2:deploy -ntp -DskipTests \
-          -DaltDeploymentRepository=github-packages::default::https://maven.pkg.github.com/${{ github.repository }}
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push release branch
+        run: |
+          BRANCH="${{ github.event.inputs.release_branch }}"
+          if git show-ref --verify --quiet refs/remotes/origin/$BRANCH; then
+            git push origin "$BRANCH" || exit 1
+          else
+            git push -u origin "$BRANCH"
+          fi
 
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: release-artifacts-${{ github.event.inputs.release_version }}
-        path: |
-          target/*.jar
-        retention-days: 30
-        if-no-files-found: warn
+      - name: Create and push tag
+        run: |
+          TAG="${{ github.event.inputs.version }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            if ! git ls-remote --tags origin "$TAG" | grep -q "$TAG"; then
+              git push origin "$TAG"
+            fi
+          elif git ls-remote --tags origin "$TAG" | grep -q "$TAG"; then
+            echo "Tag $TAG already exists remotely"
+          else
+            git tag -a "$TAG" -m "Release $TAG"
+            git push origin "$TAG"
+          fi
 
-    - name: Create GitHub Release
-      uses: softprops/action-gh-release@v1
-      with:
-        tag_name: ${{ env.TAG_NAME }}
-        name: Release ${{ env.RELEASE_VERSION }}
-        body: |
-          Release ${{ env.RELEASE_VERSION }}
+      - name: Stage artifact for release assets
+        run: |
+          ARTIFACT_PATH=$(find target -maxdepth 1 -name "jgroups-kubernetes-*.jar" ! -name "*sources*" ! -name "*javadoc*" | head -n 1)
+          if [[ -f "$ARTIFACT_PATH" ]]; then
+            sha512sum "$ARTIFACT_PATH" | awk '{ print $1 }' > "$ARTIFACT_PATH.sha512"
+            echo "ARTIFACT_PATH=$ARTIFACT_PATH" >> $GITHUB_ENV
+            echo "ARTIFACT_SHA512_PATH=$ARTIFACT_PATH.sha512" >> $GITHUB_ENV
+            echo "Found artifact: $ARTIFACT_PATH"
+          else
+            echo "jgroups-kubernetes jar not found!"
+            exit 1
+          fi
 
-          Maintenance-line release of KUBE_PING (jgroups-kubernetes) for Kubernetes-based JGroups discovery.
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.event.inputs.version }}
+          name: JGroups Kubernetes Release ${{ github.event.inputs.version }}
+          body: |
+            This is a maintenance release of jgroups-kubernetes 1.0.17.Final by martinhickson.
 
-          This release includes:
-          - Maven artifacts published to GitHub Packages
-          - Release branch: ${{ env.BRANCH_NAME }}
-          - Tag: ${{ env.TAG_NAME }}
-          - Source branch: ${{ github.event.inputs.base_branch }}
-        draft: false
-        prerelease: false
-        files: |
-          target/*.jar
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            Notable changes:
+            - Kubernetes service account token refresh: periodic re-read of the SA token file (default 60s) plus retry-on-401; refresh logging at FINE by default (INFO opt-in via KUBERNETES_SA_TOKEN_REFRESH_LOG_INFO)
+            - Artifacts published under groupId `io.github.martinhickson`
+          files: |
+            ${{ env.ARTIFACT_PATH }}
+            ${{ env.ARTIFACT_SHA512_PATH }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Import GPG key (Maven Central deploy only)
+        if: ${{ github.event.inputs.deploy_to_maven_central == 'true' }}
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.MAVEN_CENTRAL_GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.MAVEN_CENTRAL_GPG_PASSPHRASE }}
+
+      - name: Deploy artifacts to Maven Central (Optional)
+        if: ${{ github.event.inputs.deploy_to_maven_central == 'true' }}
+        run: |
+          mkdir -p ~/.m2
+          cat <<EOF > ~/.m2/settings.xml
+          <settings>
+            <servers>
+              <server>
+                <id>central</id>
+                <username>\${env.MAVEN_CENTRAL_USERNAME}</username>
+                <password>\${env.MAVEN_CENTRAL_PASSWORD}</password>
+              </server>
+            </servers>
+          </settings>
+          EOF
+          # Inject central-publishing plugin config into the (already groupId-rewritten) pom
+          python3 - <<'PYEOF'
+          pom = open('pom.xml').read()
+          plugin = """
+            <plugin>
+              <groupId>org.sonatype.central</groupId>
+              <artifactId>central-publishing-maven-plugin</artifactId>
+              <version>0.7.0</version>
+              <configuration>
+                <publishingServerId>central</publishingServerId>
+                <autoPublish>true</autoPublish>
+              </configuration>
+            </plugin>"""
+          if '<artifactId>central-publishing-maven-plugin</artifactId>' not in pom:
+              if '<plugins>' in pom:
+                  pom = pom.replace('<plugins>', '<plugins>' + plugin, 1)
+              else:
+                  pom = pom.replace('</build>', '  <plugins>' + plugin + '  </plugins>\n  </build>')
+          open('pom.xml', 'w').write(pom)
+          print('central-publishing plugin injected')
+          PYEOF
+          # Explicit goal order avoids lifecycle-ordering issues: jgroups attaches
+          # sources at 'verify', so build jar+sources+javadoc first, then sign, then publish.
+          mvn -B -ntp -DskipTests=true -Denforcer.skip=true \
+            package source:jar-no-fork javadoc:jar \
+            org.apache.maven.plugins:maven-gpg-plugin:3.2.7:sign \
+            org.sonatype.central:central-publishing-maven-plugin:0.7.0:publish \
+            -Dmaven.javadoc.failOnError=false
+        env:
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+
+# force re-index
