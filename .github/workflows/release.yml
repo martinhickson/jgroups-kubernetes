@@ -83,7 +83,7 @@ jobs:
       - name: Rewrite groupId to io.github.martinhickson
         run: |
           echo "groupId before: $(grep -m1 '<groupId>' pom.xml)"
-          sed -i '0,/<groupId>org.jgroups.kubernetes</groupId>/s//<groupId>io.github.martinhickson<\/groupId>/' pom.xml
+          sed -i '0,/<groupId>org\.jgroups\.kubernetes<\/groupId>/s//<groupId>io.github.martinhickson<\/groupId>/' pom.xml
           echo "groupId after: $(grep -m1 '<groupId>' pom.xml)"
           if ! grep -q '<groupId>io.github.martinhickson</groupId>' pom.xml; then
             echo "Error: groupId rewrite failed"
